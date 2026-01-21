@@ -1,45 +1,57 @@
 {
   "$schema": "https://greentic-ai.github.io/greentic-component/schemas/v1/component.manifest.schema.json",
-  "id": "ai.greentic.component-oauth-card",
-  "name": "component-oauth-card",
-  "version": "0.1.0",
-  "world": "greentic:component/component@0.4.0",
-  "describe_export": "get-manifest",
-  "supports": ["messaging"],
-  "profiles": {
-    "default": "stateless",
-    "supported": ["stateless"]
+  "artifacts": {
+    "component_wasm": "target/wasm32-wasip2/release/component_oauth_card.wasm"
   },
   "capabilities": {
-    "wasi": {
-      "filesystem": {
-        "mode": "none",
-        "mounts": []
-      },
-      "random": true,
-      "clocks": true
-    },
     "host": {
       "messaging": {
         "inbound": true,
         "outbound": true
       },
-      "telemetry": {
-        "scope": "node"
-      },
       "secrets": {
         "required": []
+      },
+      "telemetry": {
+        "scope": "node"
       }
+    },
+    "wasi": {
+      "clocks": true,
+      "filesystem": {
+        "mode": "none",
+        "mounts": []
+      },
+      "random": true
     }
   },
+  "config_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": true,
+    "description": "No component-level configuration is required for oauth-card.",
+    "properties": {},
+    "title": "component-oauth-card configuration",
+    "type": "object"
+  },
+  "describe_export": "get-manifest",
+  "hashes": {
+    "component_wasm": "blake3:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "id": "ai.greentic.component-oauth-card",
   "limits": {
     "memory_mb": 128,
     "wall_time_ms": 1000
   },
-  "artifacts": {
-    "component_wasm": "target/wasm32-wasip2/release/component_oauth_card.wasm"
+  "name": "component-oauth-card",
+  "profiles": {
+    "default": "stateless",
+    "supported": [
+      "stateless"
+    ]
   },
-  "hashes": {
-    "component_wasm": "blake3:0000000000000000000000000000000000000000000000000000000000000000"
-  }
+  "supports": [
+    "messaging"
+  ],
+  "version": "0.1.0",
+  "world": "greentic:component/component@0.4.0"
 }

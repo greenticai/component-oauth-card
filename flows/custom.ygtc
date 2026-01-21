@@ -1,0 +1,22 @@
+id: ai.greentic.component-oauth-card.custom
+kind: component-config
+description: Auto-generated custom config for ai.greentic.component-oauth-card
+nodes:
+  ask_config:
+    questions:
+      fields: []
+    routing:
+    - to: emit_config
+  emit_config:
+    template: |-
+      {
+        "node_id": "COMPONENT_STEP",
+        "node": {
+          "tool": {
+            "component": "ai.greentic.component-oauth-card"
+          },
+          "routing": [
+            { "to": "NEXT_NODE_PLACEHOLDER" }
+          ]
+        }
+      }

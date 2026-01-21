@@ -3,5 +3,6 @@
   "title": "component-oauth-card configuration",
   "description": "No component-level configuration is required for oauth-card.",
   "type": "object",
+  "properties": {},
   "additionalProperties": true
 }
