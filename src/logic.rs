@@ -31,6 +31,7 @@ fn status_card<B: OAuthBackend>(
         let card = connected_card(input, &token, "Connected");
         Ok(OAuthCardOutput {
             status: OAuthStatus::Ok,
+            can_continue: true,
             card: Some(card),
             auth_context: Some(auth_context(input, &token)),
             auth_header: Some(auth_header(&token)),
@@ -38,9 +39,15 @@ fn status_card<B: OAuthBackend>(
             error: None,
         })
     } else {
-        let card = connect_prompt_card(input, None);
+        let card = auth_required_card(
+            input,
+            None,
+            "Authentication required",
+            "The flow cannot continue until you successfully sign in to this OAuth service.",
+        );
         Ok(OAuthCardOutput {
             status: OAuthStatus::NeedsSignIn,
+            can_continue: false,
             card: Some(card),
             auth_context: None,
             auth_header: None,
@@ -59,19 +66,18 @@ fn start_sign_in<B: OAuthBackend>(
         .clone()
         .unwrap_or_else(|| Uuid::new_v4().to_string());
     let redirect_path = redirect_path(input);
-    let consent_url = backend
-        .get_consent_url(
-            &input.provider_id,
-            &input.subject,
-            &input.scopes,
-            &redirect_path,
-            input.extra_json.as_ref().map(|v| v.to_string()),
-        )
-        .unwrap_or_default();
+    let consent_url = backend.get_consent_url(
+        &input.provider_id,
+        &input.subject,
+        &input.scopes,
+        &redirect_path,
+        input.extra_json.as_ref().map(|v| v.to_string()),
+    )?;
     let card = sign_in_card(input, &state_id, &consent_url);
 
     Ok(OAuthCardOutput {
         status: OAuthStatus::Ok,
+        can_continue: false,
         card: Some(card),
         auth_context: None,
         auth_header: None,
@@ -88,11 +94,36 @@ fn complete_sign_in<B: OAuthBackend>(
         OAuthCardError::Invalid("auth_code is required to complete sign-in".into())
     })?;
     let redirect_path = redirect_path(input);
-    let token = backend.exchange_code(&input.provider_id, &input.subject, code, &redirect_path)?;
+    let token = match backend.exchange_code(
+        &input.provider_id,
+        &input.subject,
+        code,
+        &redirect_path,
+    ) {
+        Ok(token) => token,
+        Err(err) => {
+            let card = auth_required_card(
+                input,
+                input.state_id.clone(),
+                "Sign-in not completed",
+                "Authentication was not completed successfully. Retry sign-in to continue this flow.",
+            );
+            return Ok(OAuthCardOutput {
+                status: OAuthStatus::NeedsSignIn,
+                can_continue: false,
+                card: Some(card),
+                auth_context: None,
+                auth_header: None,
+                state_id: input.state_id.clone(),
+                error: Some(err.to_string()),
+            });
+        }
+    };
     let card = connected_card(input, &token, "Connected");
 
     Ok(OAuthCardOutput {
         status: OAuthStatus::Ok,
+        can_continue: true,
         card: Some(card),
         auth_context: Some(auth_context(input, &token)),
         auth_header: Some(auth_header(&token)),
@@ -108,6 +139,7 @@ fn ensure_token<B: OAuthBackend>(
     if let Some(token) = backend.get_token(&input.provider_id, &input.subject, &input.scopes)? {
         return Ok(OAuthCardOutput {
             status: OAuthStatus::Ok,
+            can_continue: true,
             card: None,
             auth_context: Some(auth_context(input, &token)),
             auth_header: Some(auth_header(&token)),
@@ -122,19 +154,23 @@ fn ensure_token<B: OAuthBackend>(
             .clone()
             .unwrap_or_else(|| Uuid::new_v4().to_string());
         let redirect_path = redirect_path(input);
-        let consent_url = backend
-            .get_consent_url(
-                &input.provider_id,
-                &input.subject,
-                &input.scopes,
-                &redirect_path,
-                input.extra_json.as_ref().map(|v| v.to_string()),
-            )
-            .unwrap_or_default();
-        let card = sign_in_card(input, &state_id, &consent_url);
+        let consent_url = backend.get_consent_url(
+            &input.provider_id,
+            &input.subject,
+            &input.scopes,
+            &redirect_path,
+            input.extra_json.as_ref().map(|v| v.to_string()),
+        )?;
+        let card = sign_in_card_with_message(
+            input,
+            &state_id,
+            &consent_url,
+            "Authentication required before this flow can continue.",
+        );
 
         Ok(OAuthCardOutput {
             status: OAuthStatus::NeedsSignIn,
+            can_continue: false,
             card: Some(card),
             auth_context: None,
             auth_header: None,
@@ -142,9 +178,16 @@ fn ensure_token<B: OAuthBackend>(
             error: None,
         })
     } else {
+        let card = auth_required_card(
+            input,
+            input.state_id.clone(),
+            "Authentication required",
+            "No usable access token is available. Sign in successfully before retrying this flow.",
+        );
         Ok(OAuthCardOutput {
             status: OAuthStatus::NeedsSignIn,
-            card: None,
+            can_continue: false,
+            card: Some(card),
             auth_context: None,
             auth_header: None,
             state_id: None,
@@ -176,6 +219,7 @@ fn disconnect_card(input: &OAuthCardInput) -> Result<OAuthCardOutput, OAuthCardE
 
     Ok(OAuthCardOutput {
         status: OAuthStatus::Ok,
+        can_continue: false,
         card: Some(card),
         auth_context: None,
         auth_header: None,
@@ -185,10 +229,11 @@ fn disconnect_card(input: &OAuthCardInput) -> Result<OAuthCardOutput, OAuthCardE
 }
 
 fn sign_in_card(input: &OAuthCardInput, state_id: &str, url: &str) -> MessageCard {
-    let mut card = base_card(
-        MessageCardKind::Oauth,
-        Some(format!("Connect {} account", input.provider_id)),
-        Some(format!(
+    sign_in_card_with_message(
+        input,
+        state_id,
+        url,
+        &format!(
             "Click Connect to sign in as {}{}.",
             input.subject,
             input
@@ -196,7 +241,20 @@ fn sign_in_card(input: &OAuthCardInput, state_id: &str, url: &str) -> MessageCar
                 .as_ref()
                 .map(|team| format!(" (team {team})"))
                 .unwrap_or_default()
-        )),
+        ),
+    )
+}
+
+fn sign_in_card_with_message(
+    input: &OAuthCardInput,
+    state_id: &str,
+    url: &str,
+    message: &str,
+) -> MessageCard {
+    let mut card = base_card(
+        MessageCardKind::Oauth,
+        Some(format!("Connect {} account", input.provider_id)),
+        Some(message.to_string()),
     );
     if !url.is_empty() {
         card.actions.push(Action::OpenUrl {
@@ -232,7 +290,24 @@ fn sign_in_card(input: &OAuthCardInput, state_id: &str, url: &str) -> MessageCar
 
 fn connect_prompt_card(input: &OAuthCardInput, existing_state: Option<String>) -> MessageCard {
     let state_id = existing_state.unwrap_or_else(|| Uuid::new_v4().to_string());
-    sign_in_card(input, &state_id, "")
+    sign_in_card_with_message(
+        input,
+        &state_id,
+        "",
+        "No valid access token is available. Connect the account to continue.",
+    )
+}
+
+fn auth_required_card(
+    input: &OAuthCardInput,
+    existing_state: Option<String>,
+    title: &str,
+    message: &str,
+) -> MessageCard {
+    let mut card = connect_prompt_card(input, existing_state);
+    card.title = Some(format!("{title}: {}", input.provider_id));
+    card.text = Some(format!("{message} You can retry after authenticating."));
+    card
 }
 
 fn connected_card(input: &OAuthCardInput, token: &TokenSet, headline: &str) -> MessageCard {
@@ -348,4 +423,216 @@ fn base_card(kind: MessageCardKind, title: Option<String>, text: Option<String>)
     };
     card.allow_markdown = true;
     card
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use super::*;
+    use crate::OAuthBackend;
+
+    #[derive(Default)]
+    struct TestBackend {
+        token: Option<TokenSet>,
+        consent_url: String,
+        exchange_error: Option<OAuthCardError>,
+        token_error: Option<OAuthCardError>,
+    }
+
+    impl OAuthBackend for TestBackend {
+        fn get_token(
+            &self,
+            _provider_id: &str,
+            _subject: &str,
+            _scopes: &[String],
+        ) -> Result<Option<TokenSet>, OAuthCardError> {
+            if let Some(err) = &self.token_error {
+                return Err(OAuthCardError::Unsupported(err.to_string()));
+            }
+            Ok(self.token.clone())
+        }
+
+        fn get_consent_url(
+            &self,
+            _provider_id: &str,
+            _subject: &str,
+            _scopes: &[String],
+            _redirect_path: &str,
+            _extra_json: Option<String>,
+        ) -> Result<String, OAuthCardError> {
+            Ok(self.consent_url.clone())
+        }
+
+        fn exchange_code(
+            &self,
+            _provider_id: &str,
+            _subject: &str,
+            _code: &str,
+            _redirect_path: &str,
+        ) -> Result<TokenSet, OAuthCardError> {
+            if let Some(err) = &self.exchange_error {
+                return Err(OAuthCardError::Unsupported(err.to_string()));
+            }
+            self.token
+                .clone()
+                .ok_or_else(|| OAuthCardError::Unsupported("missing token".into()))
+        }
+    }
+
+    fn sample_input(mode: OAuthCardMode) -> OAuthCardInput {
+        OAuthCardInput {
+            mode,
+            provider_id: "msgraph".into(),
+            subject: "user-1".into(),
+            tenant: Some("tenant-1".into()),
+            team: Some("team-1".into()),
+            scopes: vec!["openid".into()],
+            state_id: None,
+            auth_code: None,
+            allow_auto_sign_in: false,
+            redirect_path: None,
+            extra_json: None,
+            current_token: None,
+            consent_url: None,
+            exchanged_token: None,
+            oauth_error: None,
+        }
+    }
+
+    fn sample_token() -> TokenSet {
+        TokenSet {
+            access_token: "token-123".into(),
+            refresh_token: Some("refresh-123".into()),
+            expires_at: Some(42),
+            token_type: Some("Bearer".into()),
+            extra: Some(json!({ "email": "user@example.com" })),
+        }
+    }
+
+    #[test]
+    fn status_card_with_token_returns_connected_context() {
+        let backend = TestBackend {
+            token: Some(sample_token()),
+            consent_url: String::new(),
+            exchange_error: None,
+            token_error: None,
+        };
+
+        let output = handle(&backend, sample_input(OAuthCardMode::StatusCard)).expect("status ok");
+        assert_eq!(output.status, OAuthStatus::Ok);
+        assert_eq!(
+            output.auth_context.expect("context").email.as_deref(),
+            Some("user@example.com")
+        );
+        assert_eq!(
+            output.auth_header.expect("header").headers[0].1,
+            "Bearer token-123"
+        );
+        assert_eq!(output.card.expect("card").actions.len(), 3);
+    }
+
+    #[test]
+    fn start_sign_in_returns_open_url_and_state() {
+        let backend = TestBackend {
+            token: None,
+            consent_url: "https://consent.example".into(),
+            exchange_error: None,
+            token_error: None,
+        };
+
+        let output = handle(&backend, sample_input(OAuthCardMode::StartSignIn)).expect("start ok");
+        assert_eq!(output.status, OAuthStatus::Ok);
+        assert!(output.state_id.is_some());
+        let card = output.card.expect("card");
+        assert!(card.actions.iter().any(|action| matches!(
+            action,
+            Action::OpenUrl { url, .. } if url == "https://consent.example"
+        )));
+        assert_eq!(
+            card.oauth.expect("oauth").provider,
+            OauthProvider::Microsoft
+        );
+    }
+
+    #[test]
+    fn complete_sign_in_requires_auth_code() {
+        let backend = TestBackend::default();
+        let err = handle(&backend, sample_input(OAuthCardMode::CompleteSignIn))
+            .expect_err("missing auth_code");
+        assert!(matches!(err, OAuthCardError::Invalid(_)));
+    }
+
+    #[test]
+    fn complete_sign_in_uses_backend_exchange() {
+        let backend = TestBackend {
+            token: Some(sample_token()),
+            consent_url: String::new(),
+            exchange_error: None,
+            token_error: None,
+        };
+        let mut input = sample_input(OAuthCardMode::CompleteSignIn);
+        input.auth_code = Some("code-123".into());
+
+        let output = handle(&backend, input).expect("complete ok");
+        assert_eq!(output.status, OAuthStatus::Ok);
+        assert_eq!(
+            output.card.expect("card").title.as_deref(),
+            Some("Connected: msgraph")
+        );
+    }
+
+    #[test]
+    fn ensure_token_without_auto_sign_in_returns_no_card() {
+        let backend = TestBackend::default();
+        let output = handle(&backend, sample_input(OAuthCardMode::EnsureToken)).expect("ensure ok");
+        assert_eq!(output.status, OAuthStatus::NeedsSignIn);
+        assert!(!output.can_continue);
+        assert!(output.card.is_some());
+    }
+
+    #[test]
+    fn ensure_token_with_auto_sign_in_returns_card() {
+        let backend = TestBackend {
+            token: None,
+            consent_url: "https://consent.example".into(),
+            exchange_error: None,
+            token_error: None,
+        };
+        let mut input = sample_input(OAuthCardMode::EnsureToken);
+        input.allow_auto_sign_in = true;
+
+        let output = handle(&backend, input).expect("ensure ok");
+        assert_eq!(output.status, OAuthStatus::NeedsSignIn);
+        assert!(output.state_id.is_some());
+        assert!(output.card.is_some());
+    }
+
+    #[test]
+    fn disconnect_returns_reconnect_card() {
+        let output = handle(
+            &TestBackend::default(),
+            sample_input(OAuthCardMode::Disconnect),
+        )
+        .expect("disconnect ok");
+        assert_eq!(output.status, OAuthStatus::Ok);
+        let card = output.card.expect("card");
+        assert!(card.actions.iter().any(|action| matches!(
+            action,
+            Action::PostBack { title, .. } if title == "Reconnect"
+        )));
+    }
+
+    #[test]
+    fn provider_mapping_and_redirect_helpers_cover_variants() {
+        assert_eq!(provider_from_id("github"), OauthProvider::Github);
+        assert_eq!(provider_from_id("google"), OauthProvider::Google);
+        assert_eq!(provider_from_id("custom-provider"), OauthProvider::Custom);
+
+        let input = sample_input(OAuthCardMode::StatusCard);
+        assert_eq!(redirect_path(&input), "/oauth/callback/msgraph");
+
+        let mut explicit = sample_input(OAuthCardMode::StatusCard);
+        explicit.redirect_path = Some("/custom/callback".into());
+        assert_eq!(redirect_path(&explicit), "/custom/callback");
+    }
 }

@@ -1,41 +1,54 @@
 # Repository Overview
 
 ## 1. High-Level Purpose
-Greentic OAuth card component implemented for wasm32-wasip2. It exposes the Greentic component-node interface and drives OAuth connect/status flows by talking to the host `greentic:oauth-broker` bindings. The component returns structured JSON with card metadata, auth context, and headers for downstream API calls instead of simple echo output.
+Greentic OAuth card component implemented for wasm32-wasip2 on the self-describing split `greentic:component/component-v0-v6-v0@0.6.0` ABI. The component exposes an OAuth card runtime operation plus QA/i18n helper operations, imports the Greentic OAuth broker through the same local WIT world, and embeds locale bundles into the wasm at build time.
 
 ## 2. Main Components and Functionality
 - **Path:** `src/lib.rs`  
-  **Role:** Component entrypoint and wasm exports.  
-  **Key functionality:** Implements component-node guest, parses incoming JSON requests, and dispatches to OAuth card logic. Exports structured errors and uses `greentic-interfaces-guest` (feature: `component-node`) on wasm. Supports crate-type `cdylib` and `rlib` for testing.
-- **Path:** `src/model.rs`  
-  **Role:** Data model for inputs/outputs.  
-  **Key functionality:** Defines `OAuthCardInput`/`OAuthCardOutput`, modes (status-card, start-sign-in, complete-sign-in, ensure-token, disconnect), token sets, and status enum. Includes local `MessageCard`/`Action`/`OauthCard` structs mirroring `gsm_core::messaging_card::types` (kind/title/text/images/actions/allow_markdown/adaptive/oauth).
-- **Path:** `src/broker.rs`  
-  **Role:** Abstraction over the OAuth broker.  
-  **Key functionality:** Trait `OAuthBackend`; native `NoopBroker` keeps tests deterministic; `MockBroker` for unit tests; input parser helper. Wasm `HostBroker` currently reports `Unsupported` because oauth-broker bindings are exposed as exports rather than imports in `greentic-interfaces-guest`.
+  **Role:** Component entrypoint, operation dispatcher, and schema helpers.  
+  **Key functionality:** Routes `oauth_card.handle_message`, `component-info`, `qa-spec`, `apply-answers`, and `i18n-keys`; merges runtime config defaults into invoke payloads; emits JSON schema documents for the self-describing manifest/describe surface. The described component version is sourced from `CARGO_PKG_VERSION`, and the self-description explicitly documents the runtime dependency on the Greentic OAuth provider extension/broker.
 - **Path:** `src/logic.rs`  
-  **Role:** Mode handlers.  
-  **Key functionality:** status-card queries broker token; start-sign-in builds consent card and state; complete-sign-in exchanges code and returns auth header/context; ensure-token returns header or sign-in card (auto); disconnect returns a reconnect card. Cards are `MessageCard` with PostBack/OpenUrl actions and `OauthCard` metadata including state/consent URL.
-- **Path:** `schemas/` (`component.schema.json`, `io/input.schema.json`, `io/output.schema.json`)  
-  **Role:** JSON Schemas describing component configuration, input, and output payloads.  
-  **Key functionality:** Component config is currently empty/optional; input schema models OAuthCardInput (mode enum, provider/subject, scopes, state/auth_code, auto sign-in flag, redirect path, extra JSON); output schema models OAuthCardOutput (status, MessageCard shape with actions/adaptive/oauth metadata, auth_context, auth_header header pairs, state_id, error).
-- **Path:** `component.manifest.json`  
-  **Role:** Greentic component manifest describing identity, supported world (`greentic:component/component@0.4.0`), messaging capability, WASI allowances, limits, and artifact path `target/wasm32-wasip2/release/component_oauth_card.wasm`.  
-  **Key functionality:** Hash currently placeholder (`blake3:000…000`) because wasm build with oauth-broker guest imports is blocked by linker export expectations; needs rebuild once bindings issue is resolved.
-- **Path:** `tests/conformance.rs` and unit tests in `src/lib.rs`  
-  **Role:** Verify manifest world name and OAuth card logic paths.  
-  **Key functionality:** Status-card returns `needs-sign-in` when no token; unit tests cover connected status, ensure-token auto sign-in prompt, start-sign-in card/state, complete-sign-in auth header/context, and disconnect reconnect card.
-- **Path:** `Makefile`  
-  **Role:** Convenience targets for `build`/`check` (wasm target), `lint` (fmt+clippy), and `test` (workspace all targets).
-- **Path:** `ci/local_check.sh`  
-  **Role:** CI helper to run `cargo fmt`, `cargo clippy --workspace --all-targets -D warnings`, and `cargo test --workspace --all-targets`.
+  **Role:** OAuth runtime behavior.  
+  **Key functionality:** Handles status-card, start-sign-in, complete-sign-in, ensure-token, and disconnect flows; builds reconnect/sign-in/connected cards; emits auth context and authorization headers from broker tokens.
+- **Path:** `src/broker.rs`  
+  **Role:** OAuth broker abstraction.  
+  **Key functionality:** Defines the `OAuthBackend` trait, native `NoopBroker`, wasm `HostBroker`, and test `MockBroker`; includes JSON input parsing for OAuth card requests.
+- **Path:** `src/model.rs`  
+  **Role:** JSON data contract model.  
+  **Key functionality:** Defines OAuth input/output structs, token/auth structures, card/action types, and OAuth provider/prompt/status enums.
+- **Path:** `src/qa.rs`  
+  **Role:** Setup/update/remove QA contract.  
+  **Key functionality:** Normalizes lifecycle aliases through `NormalizedMode`; emits QA specs with i18n-backed labels; applies setup answers into runtime config and validates remove/setup edge cases.
+- **Path:** `src/i18n.rs` and `src/i18n_bundle.rs`  
+  **Role:** Translation bundle loading and lookup.  
+  **Key functionality:** Packs `assets/i18n/*.json` into canonical CBOR during build, exposes runtime lookup with locale fallback, and returns the full English key set for `i18n-keys`.
+- **Path:** `build.rs`  
+  **Role:** Build-time asset generation.  
+  **Key functionality:** Embeds the i18n CBOR bundle and renders `component.manifest.json` from `component.manifest.template.json`, keeping the manifest version and package metadata aligned with `Cargo.toml`.
+- **Path:** `component.manifest.template.json` and generated `component.manifest.json`  
+  **Role:** Manifest source and concrete artifact.  
+  **Key functionality:** Define the 0.6.0 component manifest, runtime capabilities, config schema, operation schemas, and artifact path. The generated manifest tracks `CARGO_PKG_NAME` and `CARGO_PKG_VERSION`.
+- **Path:** `schemas/component.schema.json`  
+  **Role:** Standalone config schema file.  
+  **Key functionality:** Mirrors the runtime config schema used by `apply-answers` and the manifest (`provider_id`, default subject, scopes, tenant/team, redirect path, auto sign-in).
+- **Path:** `assets/i18n/en.json`, `assets/i18n/locales.json`, and `tools/i18n.sh`  
+  **Role:** Translation source and translation workflow.  
+  **Key functionality:** English source strings for QA flows and component self-description, locale registry, and helper script that enforces a minimum translator batch size of `500`.
+- **Path:** `tests/conformance.rs` and module tests in `src/lib.rs`, `src/logic.rs`, `src/broker.rs`, `src/qa.rs`, `src/i18n_bundle.rs`  
+  **Role:** Automated verification.  
+  **Key functionality:** Covers manifest/version invariants, schema file presence, README requirement documentation, dispatch/config merge behavior, QA normalization and config application, broker parsing, i18n bundle round-trip, and most OAuth runtime branches.
+- **Path:** `Makefile` and `ci/local_check.sh`  
+  **Role:** Local verification entrypoints.  
+  **Key functionality:** Provide `fmt`, `clippy`, `test`, `wasm`, and `doctor` targets plus the CI wrapper script used for final local validation.
 
 ## 3. Work In Progress, TODOs, and Stubs
-- OAuth broker host bindings are not wired on wasm: `HostBroker` uses the `oauth_broker_client` imports, but enabling the oauth-broker feature in `greentic-interfaces-guest` causes the linker to require broker exports, so wasm builds currently fail; awaiting a client-only import setup or adjusted bindings.
-- Manifest hash reset to placeholder until a successful wasm build with the broker imports is available.
+- Wasm broker integration still depends on the guest oauth broker bindings linking correctly in this repo’s environment; the native test backend remains a no-op placeholder.
+- `component.manifest.json` is generated from the template during build, so edits should be applied to `component.manifest.template.json` rather than directly to the generated file.
+- The manifest hash remains the placeholder value until a wasm artifact is built and hashed through `make wasm`.
 
 ## 4. Broken, Failing, or Conflicting Areas
-- Wasm build fails: `failed to find export of interface greentic:oauth-broker/broker-v1@1.0.0#get-consent-url` when using `greentic-interfaces-guest` with `oauth-broker` feature; current client bindings generate export expectations. Host/native tests pass.
+- `make wasm` / actual wasm linking may still fail if the `greentic-interfaces-guest` oauth broker feature expects host exports incompatible with the current runner/tooling setup. Native tests and clippy currently pass.
 
 ## 5. Notes for Future Work
-- Add richer messaging/card integration once a canonical Greentic messaging card abstraction is published as a standalone dependency (local MessageCard mirrors gsm-core types).
+- Add direct wasm-level doctor/invocation tests once the broker guest bindings are stable in this repository.
+- Consider generating `schemas/component.schema.json` from the same Rust/schema source used by `src/lib.rs` to remove one remaining schema duplication point.

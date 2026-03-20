@@ -1,25 +1,137 @@
 # component-oauth-card
 
-A minimal Rust + WASI-P2 Greentic component scaffolded via `greentic-component new`.
+OAuth card component for Greentic `component@0.6.0`.
+
+This component shows OAuth status, sign-in, and blocking messages for a flow. It
+does not import the OAuth broker directly. Instead, your flow calls the
+Greentic OAuth operations from `../greentic-oauth` first, then passes their
+results into this component.
 
 ## Requirements
 
- - Rust 1.89+
+- Rust 1.91+
 - `wasm32-wasip2` target (`rustup target add wasm32-wasip2`)
 
-## Getting Started
+This repository follows the self-describing 0.6.0 shape instead of legacy
+`flows/default.ygtc` and `flows/custom.ygtc`.
+
+## Required Greentic OAuth Extension
+
+This component cannot work on its own.
+
+It requires the Greentic OAuth provider extension and operations from
+`../greentic-oauth` to be installed in the environment where the flow runs.
+That extension is what:
+
+- knows which OAuth providers exist
+- stores and refreshes OAuth credentials
+- returns consent URLs
+- exchanges authorization codes for tokens
+
+If the Greentic OAuth provider extension is missing, or if `provider_id` does
+not match a provider that extension exposes, the upstream OAuth operations
+cannot produce the data this component needs and the flow stays blocked.
+
+## What This Component Does
+
+- Shows a connected or needs-sign-in card for a chosen OAuth provider.
+- Returns an authorization header only when a usable token is available.
+- Marks the response as `can_continue: false` when authentication is still required.
+- Exposes setup questions so Greentic can configure it without custom flow files.
+- Exposes i18n-aware self-description data through `component-info`.
+
+## Main Operations
+
+- `oauth_card.handle_message`
+- `component-info`
+- `qa-spec`
+- `apply-answers`
+- `i18n-keys`
+
+## Typical Flow
+
+1. Make sure the Greentic OAuth provider extension is installed and that your chosen provider ID exists there.
+2. Configure the component once with a default provider ID and optional scopes.
+3. Call a Greentic OAuth operation to check for a usable token.
+4. Call `oauth_card.handle_message` with `mode: "status-card"` or `mode: "ensure-token"` and pass that token as `current_token`.
+5. If the component says `needs-sign-in`, call a Greentic OAuth operation that returns a consent URL.
+6. Call the component with `mode: "start-sign-in"` and pass that URL as `consent_url`.
+7. After your callback endpoint receives an auth code, call a Greentic OAuth operation that exchanges the code.
+8. Call the component with `mode: "complete-sign-in"` and pass the returned token as `exchanged_token`.
+9. Only continue the flow when the response has `can_continue: true`.
+
+## Authentication Rules
+
+The intended behavior is:
+
+1. You configure which OAuth service/provider this component is for.
+2. That provider must exist in the installed Greentic OAuth provider extension.
+3. A separate Greentic OAuth operation checks for a usable token for that provider, user, and scope.
+4. That OAuth operation may use a stored refresh token to refresh the access token and persist the updated token set.
+5. If no usable token exists, or reauthentication is needed, this component returns `needs-sign-in` and `can_continue: false`.
+6. The flow should not continue until the user completes sign-in successfully.
+7. The user may retry, but no downstream authenticated step should proceed until `can_continue: true`.
+
+## Runtime Input Fields
+
+`oauth_card.handle_message` expects the usual `mode`, `provider_id`, and
+`subject`, plus upstream OAuth operation results when relevant:
+
+- `current_token`: token already checked or refreshed upstream
+- `consent_url`: URL that starts the sign-in step
+- `exchanged_token`: token returned after exchanging an authorization code
+- `oauth_error`: upstream OAuth error to show to the user
+
+## Configuration
+
+The component stores a small runtime configuration:
+
+- `provider_id`: the OAuth provider name, such as `msgraph` or `github`; this must be exposed by the installed Greentic OAuth provider extension
+- `default_subject`: optional fallback user identifier
+- `scopes`: default scopes to request
+- `tenant`: optional tenant context
+- `team`: optional team context
+- `redirect_path`: optional callback path override
+- `allow_auto_sign_in`: whether `ensure-token` should create a sign-in card automatically
+
+Greentic can build this configuration automatically through:
+
+- `qa-spec`: asks the setup/update/remove questions
+- `apply-answers`: converts those answers into saved config JSON
+
+## i18n
+
+English source strings live in `assets/i18n/en.json`. `build.rs` embeds every
+locale JSON file under `assets/i18n/` into the final wasm at build time.
+The same build step also renders `component.manifest.json` from
+`component.manifest.template.json`, so the manifest version tracks
+`Cargo.toml` automatically.
+
+Use `./tools/i18n.sh` to generate or refresh translated locale files.
+
+## Output Contract
+
+The main runtime output includes:
+
+- `status`: `ok`, `needs-sign-in`, or `error`
+- `can_continue`: whether the flow is allowed to proceed
+- `card`: what to show the user
+- `auth_header`: only present when a usable token is available
+- `auth_context`: token/provider context for downstream logic
+
+If `can_continue` is `false`, treat that as a hard stop for the current flow
+path until the user finishes authentication successfully.
+
+## Development Checks
 
 ```bash
-cargo build --target wasm32-wasip2
 cargo test
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
-The generated `component.manifest.json` references the release artifact at
-`target/wasm32-wasip2/release/component_oauth_card.wasm`. Update the manifest hash by
-running `greentic-component inspect --json target/wasm32-wasip2/release/component_oauth_card.wasm`.
+For a component artifact, manifest hash, and doctor validation:
 
-## Next Steps
-
-- Implement domain-specific logic inside `src/lib.rs`.
-- Extend `schemas/` with the inputs/outputs your component expects.
-- Wire additional capabilities or telemetry requirements into `component.manifest.json`.
+```bash
+make wasm
+make doctor
+```

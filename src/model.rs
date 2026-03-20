@@ -130,11 +130,21 @@ pub struct OAuthCardInput {
     pub redirect_path: Option<String>,
     /// Provider-specific options forwarded to the broker.
     pub extra_json: Option<serde_json::Value>,
+    /// Token already resolved by an upstream OAuth operation.
+    pub current_token: Option<TokenSet>,
+    /// Consent URL already resolved by an upstream OAuth operation.
+    pub consent_url: Option<String>,
+    /// Token returned by an upstream exchange-code operation.
+    pub exchanged_token: Option<TokenSet>,
+    /// Upstream OAuth operation error to surface in blocking states.
+    pub oauth_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct OAuthCardOutput {
     pub status: OAuthStatus,
+    #[serde(default = "default_true")]
+    pub can_continue: bool,
     pub card: Option<MessageCard>,
     pub auth_context: Option<AuthContext>,
     pub auth_header: Option<AuthHeader>,

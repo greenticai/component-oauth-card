@@ -1,8 +1,49 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "allow_auto_sign_in": {
+      "default": false,
+      "type": "boolean"
+    },
+    "default_subject": {
+      "description": "Default subject when the invoke payload omits `subject`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "provider_id": {
+      "description": "OAuth provider identifier used by the upstream Greentic OAuth operations. This must match a provider exposed by the installed Greentic OAuth provider extension.",
+      "type": "string"
+    },
+    "redirect_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "scopes": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "team": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "tenant": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [],
   "title": "component-oauth-card configuration",
-  "description": "No component-level configuration is required for oauth-card.",
-  "type": "object",
-  "properties": {},
-  "additionalProperties": true
+  "type": "object"
 }

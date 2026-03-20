@@ -1,0 +1,22 @@
+{
+  "name": "component",
+  "versions": [
+    {
+      "version": "0.6.0",
+      "schema": {
+        "functions": [
+          {
+            "interface": "node",
+            "name": "describe"
+          },
+          {
+            "interface": "node",
+            "name": "invoke"
+          }
+        ],
+        "world": "greentic:component/component@0.6.0"
+      }
+    }
+  ],
+  "schema_id": "greentic:component/component@0.6.0"
+}

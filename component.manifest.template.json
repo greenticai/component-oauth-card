@@ -1,0 +1,460 @@
+{
+  "$schema": "https://greentic-ai.github.io/greentic-component/schemas/v1/component.manifest.schema.json",
+  "artifacts": {
+    "component_wasm": "target/wasm32-wasip2/release/${CARGO_PKG_NAME_UNDERSCORE}.wasm"
+  },
+  "capabilities": {
+    "host": {
+      "messaging": {
+        "inbound": true,
+        "outbound": true
+      },
+      "secrets": {
+        "required": []
+      },
+      "telemetry": {
+        "scope": "node"
+      }
+    },
+    "wasi": {
+      "clocks": true,
+      "filesystem": {
+        "mode": "none",
+        "mounts": []
+      },
+      "random": true
+    }
+  },
+  "config_schema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "component-oauth-card configuration",
+    "type": "object",
+    "properties": {
+      "provider_id": {
+        "type": "string",
+        "description": "OAuth provider identifier used by the upstream Greentic OAuth operations. This must match a provider exposed by the installed Greentic OAuth provider extension."
+      },
+      "default_subject": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "Default subject when the invoke payload omits `subject`."
+      },
+      "scopes": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": []
+      },
+      "tenant": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "team": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "redirect_path": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "allow_auto_sign_in": {
+        "type": "boolean",
+        "default": false
+      }
+    },
+    "required": [],
+    "additionalProperties": false
+  },
+  "default_operation": "oauth_card.handle_message",
+  "describe_export": "describe",
+  "hashes": {
+    "component_wasm": "blake3:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "id": "ai.greentic.component-oauth-card",
+  "limits": {
+    "memory_mb": 128,
+    "wall_time_ms": 1000
+  },
+  "name": "${CARGO_PKG_NAME}",
+  "operations": [
+    {
+      "name": "oauth_card.handle_message",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "component-oauth-card oauth_card.handle_message input",
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "status-card",
+              "start-sign-in",
+              "complete-sign-in",
+              "ensure-token",
+              "disconnect"
+            ],
+            "default": "status-card"
+          },
+          "provider_id": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "tenant": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "team": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "state_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "auth_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "allow_auto_sign_in": {
+            "type": "boolean",
+            "default": false
+          },
+          "redirect_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "extra_json": {},
+          "current_token": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "consent_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "exchanged_token": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "oauth_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "mode",
+          "provider_id",
+          "subject"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "component-oauth-card oauth_card.handle_message output",
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "needs-sign-in",
+              "error"
+            ]
+          },
+          "card": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "can_continue": {
+            "type": "boolean"
+          },
+          "auth_context": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "auth_header": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "state_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "can_continue"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "component-info",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "component-oauth-card component-info input",
+        "type": "object",
+        "properties": {
+          "locale": {
+            "type": "string",
+            "default": "en"
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "component-oauth-card component-info output",
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "version": { "type": "string" },
+          "display_name": { "type": "object", "additionalProperties": true },
+          "summary": { "type": "object", "additionalProperties": true },
+          "details": { "type": "object", "additionalProperties": true },
+          "use_cases": {
+            "type": "array",
+            "items": { "type": "object", "additionalProperties": true }
+          },
+          "operations": {
+            "type": "array",
+            "items": { "type": "object", "additionalProperties": true }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "version",
+          "display_name",
+          "summary",
+          "details",
+          "use_cases",
+          "operations"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "qa-spec",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "component-oauth-card qa-spec input",
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "default",
+              "setup",
+              "install",
+              "update",
+              "upgrade",
+              "remove"
+            ]
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "component-oauth-card qa-spec output",
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "setup",
+              "update",
+              "remove"
+            ]
+          },
+          "title": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "description": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "questions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "defaults": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "mode",
+          "questions",
+          "defaults"
+        ],
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "apply-answers",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "component-oauth-card apply-answers input",
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "default",
+              "setup",
+              "install",
+              "update",
+              "upgrade",
+              "remove"
+            ]
+          },
+          "answers": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "current_config": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "answers"
+        ],
+        "additionalProperties": true
+      },
+      "output_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "component-oauth-card apply-answers output",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {}
+          },
+          "errors": {
+            "type": "array",
+            "items": {}
+          },
+          "config": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "meta": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "audit": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "ok",
+          "warnings",
+          "errors"
+        ],
+        "additionalProperties": true
+      }
+    },
+    {
+      "name": "i18n-keys",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "component-oauth-card i18n-keys input",
+        "type": "object",
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "component-oauth-card i18n-keys output",
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    }
+  ],
+  "profiles": {
+    "default": "stateless",
+    "supported": [
+      "stateless"
+    ]
+  },
+  "secret_requirements": [],
+  "supports": [
+    "messaging"
+  ],
+  "version": "${CARGO_PKG_VERSION}",
+  "world": "greentic:component/component@0.6.0"
+}

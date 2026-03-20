@@ -1,16 +1,38 @@
 #![warn(clippy::unwrap_used, clippy::expect_used)]
 
 mod broker;
+pub mod i18n;
+pub mod i18n_bundle;
 mod logic;
 mod model;
+pub mod qa;
+mod schema;
 
-pub use broker::{OAuthBackend, default_backend};
+pub use broker::OAuthBackend;
 pub use logic::handle;
 pub use model::{
     Action, AuthContext, AuthHeader, OAuthCardInput, OAuthCardMode, OAuthCardOutput, OAuthStatus,
     TokenSet,
 };
+pub use schema::oauth_config_schema_json;
+
+use greentic_types::i18n_text::I18nText;
+use greentic_types::schemas::common::schema_ir::{AdditionalProperties, SchemaIr};
+use greentic_types::schemas::component::v0_6_0::{
+    ComponentDescribe, ComponentInfo, ComponentOperation, ComponentRunInput, ComponentRunOutput,
+    schema_hash,
+};
+use serde_json::{Value, json};
 use thiserror::Error;
+
+#[cfg(target_arch = "wasm32")]
+use greentic_interfaces_guest::component_v0_6::node;
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+const COMPONENT_NAME: &str = "component-oauth-card";
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+const COMPONENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+const DEFAULT_OPERATION: &str = "oauth_card.handle_message";
+const COMPONENT_INFO_OPERATION: &str = "component-info";
 
 #[derive(Debug, Error)]
 pub enum OAuthCardError {
@@ -28,336 +50,1420 @@ pub enum OAuthCardError {
 static WASI_TARGET_MARKER: [u8; 13] = *b"wasm32-wasip2";
 
 #[cfg(target_arch = "wasm32")]
-mod component {
-    use greentic_interfaces_guest::component::node::{
-        self, ExecCtx, InvokeResult, LifecycleStatus, StreamEvent,
-    };
+use greentic_types::cbor::canonical;
 
-    use super::{describe_payload, handle_message};
+#[cfg(target_arch = "wasm32")]
+struct Component;
 
-    pub(super) struct Component;
-
-    impl node::Guest for Component {
-        fn get_manifest() -> String {
-            describe_payload()
+#[cfg(target_arch = "wasm32")]
+impl node::Guest for Component {
+    fn describe() -> node::ComponentDescriptor {
+        node::ComponentDescriptor {
+            name: COMPONENT_NAME.to_string(),
+            version: COMPONENT_VERSION.to_string(),
+            summary: Some(i18n::t("en", "component.summary")),
+            capabilities: Vec::new(),
+            ops: vec![
+                node_op(
+                    DEFAULT_OPERATION,
+                    "component.operation.oauth_card.handle_message.summary",
+                    oauth_input_schema_ir(),
+                    oauth_output_schema_ir(),
+                ),
+                node_op(
+                    COMPONENT_INFO_OPERATION,
+                    "component.operation.component_info.summary",
+                    component_info_input_schema_ir(),
+                    component_info_output_schema_ir(),
+                ),
+                node_op(
+                    "qa-spec",
+                    "component.operation.qa_spec.summary",
+                    qa_spec_input_schema_ir(),
+                    qa_spec_output_schema_ir(),
+                ),
+                node_op(
+                    "apply-answers",
+                    "component.operation.apply_answers.summary",
+                    apply_answers_input_schema_ir(),
+                    apply_answers_output_schema_ir(),
+                ),
+                node_op(
+                    "i18n-keys",
+                    "component.operation.i18n_keys.summary",
+                    i18n_keys_input_schema_ir(),
+                    i18n_keys_output_schema_ir(),
+                ),
+            ],
+            schemas: Vec::new(),
+            setup: None,
         }
+    }
 
-        fn on_start(_ctx: ExecCtx) -> Result<LifecycleStatus, String> {
-            Ok(LifecycleStatus::Ok)
-        }
-
-        fn on_stop(_ctx: ExecCtx, _reason: String) -> Result<LifecycleStatus, String> {
-            Ok(LifecycleStatus::Ok)
-        }
-
-        fn invoke(_ctx: ExecCtx, op: String, input: String) -> InvokeResult {
-            InvokeResult::Ok(handle_message(&op, &input))
-        }
-
-        fn invoke_stream(_ctx: ExecCtx, op: String, input: String) -> Vec<StreamEvent> {
-            vec![
-                StreamEvent::Progress(0),
-                StreamEvent::Data(handle_message(&op, &input)),
-                StreamEvent::Done,
-            ]
-        }
+    fn invoke(
+        operation: String,
+        envelope: node::InvocationEnvelope,
+    ) -> Result<node::InvocationResult, node::NodeError> {
+        Ok(node::InvocationResult {
+            ok: true,
+            output_cbor: run_component_cbor(&operation, envelope.payload_cbor),
+            output_metadata_cbor: None,
+        })
     }
 }
 
 #[cfg(target_arch = "wasm32")]
-mod exports {
-    use super::component::Component;
-    use greentic_interfaces_guest::component::node;
+greentic_interfaces_guest::export_component_v060!(Component);
 
-    #[unsafe(export_name = "greentic:component/node@0.4.0#get-manifest")]
-    unsafe extern "C" fn export_get_manifest() -> *mut u8 {
-        unsafe { node::_export_get_manifest_cabi::<Component>() }
-    }
-
-    #[unsafe(export_name = "cabi_post_greentic:component/node@0.4.0#get-manifest")]
-    unsafe extern "C" fn post_return_get_manifest(arg0: *mut u8) {
-        unsafe { node::__post_return_get_manifest::<Component>(arg0) };
-    }
-
-    #[unsafe(export_name = "greentic:component/node@0.4.0#on-start")]
-    unsafe extern "C" fn export_on_start(arg0: *mut u8) -> *mut u8 {
-        unsafe { node::_export_on_start_cabi::<Component>(arg0) }
-    }
-
-    #[unsafe(export_name = "cabi_post_greentic:component/node@0.4.0#on-start")]
-    unsafe extern "C" fn post_return_on_start(arg0: *mut u8) {
-        unsafe { node::__post_return_on_start::<Component>(arg0) };
-    }
-
-    #[unsafe(export_name = "greentic:component/node@0.4.0#on-stop")]
-    unsafe extern "C" fn export_on_stop(arg0: *mut u8) -> *mut u8 {
-        unsafe { node::_export_on_stop_cabi::<Component>(arg0) }
-    }
-
-    #[unsafe(export_name = "cabi_post_greentic:component/node@0.4.0#on-stop")]
-    unsafe extern "C" fn post_return_on_stop(arg0: *mut u8) {
-        unsafe { node::__post_return_on_stop::<Component>(arg0) };
-    }
-
-    #[unsafe(export_name = "greentic:component/node@0.4.0#invoke")]
-    unsafe extern "C" fn export_invoke(arg0: *mut u8) -> *mut u8 {
-        unsafe { node::_export_invoke_cabi::<Component>(arg0) }
-    }
-
-    #[unsafe(export_name = "cabi_post_greentic:component/node@0.4.0#invoke")]
-    unsafe extern "C" fn post_return_invoke(arg0: *mut u8) {
-        unsafe { node::__post_return_invoke::<Component>(arg0) };
-    }
-
-    #[unsafe(export_name = "greentic:component/node@0.4.0#invoke-stream")]
-    unsafe extern "C" fn export_invoke_stream(arg0: *mut u8) -> *mut u8 {
-        unsafe { node::_export_invoke_stream_cabi::<Component>(arg0) }
-    }
-
-    #[unsafe(export_name = "cabi_post_greentic:component/node@0.4.0#invoke-stream")]
-    unsafe extern "C" fn post_return_invoke_stream(arg0: *mut u8) {
-        unsafe { node::__post_return_invoke_stream::<Component>(arg0) };
+pub fn invoke_json(operation: &str, payload: &Value) -> Result<Value, OAuthCardError> {
+    match operation {
+        DEFAULT_OPERATION | "handle_message" => handle_operation_json(payload),
+        COMPONENT_INFO_OPERATION => Ok(component_info_json(payload)),
+        "qa-spec" => Ok(qa::qa_spec_json(normalized_mode(payload))),
+        "apply-answers" => Ok(qa::apply_answers(normalized_mode(payload), payload)),
+        "i18n-keys" => Ok(Value::Array(
+            qa::i18n_keys().into_iter().map(Value::String).collect(),
+        )),
+        _ => Err(OAuthCardError::Unsupported(format!(
+            "unsupported operation: {operation}"
+        ))),
     }
 }
 
-pub fn describe_payload() -> String {
-    serde_json::json!({
-        "component": {
-            "name": "component-oauth-card",
-            "org": "ai.greentic",
-            "version": "0.1.0",
-            "world": "greentic:component/component@0.4.0",
-            "schemas": {
-                "component": "schemas/component.schema.json",
-                "input": "schemas/io/input.schema.json",
-                "output": "schemas/io/output.schema.json"
+fn handle_operation_json(payload: &Value) -> Result<Value, OAuthCardError> {
+    let merged = merge_input_with_config(payload);
+    let input: OAuthCardInput = serde_json::from_value(merged)
+        .map_err(|err| OAuthCardError::Parse(format!("input json: {err}")))?;
+    let backend = broker::InputBroker::from_input(&input);
+    let output = logic::handle(&backend, input).unwrap_or_else(error_output);
+    serde_json::to_value(output).map_err(|err| OAuthCardError::Parse(format!("output json: {err}")))
+}
+
+fn merge_input_with_config(payload: &Value) -> Value {
+    let mut object = payload.as_object().cloned().unwrap_or_default();
+    if !object.contains_key("mode") {
+        object.insert("mode".to_string(), Value::String("status-card".to_string()));
+    }
+
+    if let Some(config) = payload.get("config").and_then(Value::as_object) {
+        copy_if_missing(&mut object, config, "provider_id", "provider_id");
+        copy_if_missing(&mut object, config, "default_subject", "subject");
+        copy_if_missing(&mut object, config, "scopes", "scopes");
+        copy_if_missing(
+            &mut object,
+            config,
+            "allow_auto_sign_in",
+            "allow_auto_sign_in",
+        );
+        copy_if_missing(&mut object, config, "redirect_path", "redirect_path");
+        copy_if_missing(&mut object, config, "tenant", "tenant");
+        copy_if_missing(&mut object, config, "team", "team");
+    }
+
+    Value::Object(object)
+}
+
+fn copy_if_missing(
+    target: &mut serde_json::Map<String, Value>,
+    source: &serde_json::Map<String, Value>,
+    source_key: &str,
+    target_key: &str,
+) {
+    if !target.contains_key(target_key)
+        && let Some(value) = source.get(source_key)
+    {
+        target.insert(target_key.to_string(), value.clone());
+    }
+}
+
+fn normalized_mode(payload: &Value) -> qa::NormalizedMode {
+    payload
+        .get("mode")
+        .and_then(Value::as_str)
+        .or_else(|| payload.get("operation").and_then(Value::as_str))
+        .and_then(qa::normalize_mode)
+        .unwrap_or(qa::NormalizedMode::Setup)
+}
+
+fn error_output(err: OAuthCardError) -> OAuthCardOutput {
+    OAuthCardOutput {
+        status: OAuthStatus::Error,
+        can_continue: false,
+        card: None,
+        auth_context: None,
+        auth_header: None,
+        state_id: None,
+        error: Some(err.to_string()),
+    }
+}
+
+fn component_info_json(payload: &Value) -> Value {
+    let locale = payload
+        .get("locale")
+        .and_then(Value::as_str)
+        .unwrap_or("en");
+
+    json!({
+        "id": "ai.greentic.component-oauth-card",
+        "name": COMPONENT_NAME,
+        "version": COMPONENT_VERSION,
+        "display_name": {
+            "key": "component.display_name",
+            "fallback": i18n::t(locale, "component.display_name")
+        },
+        "summary": {
+            "key": "component.summary",
+            "fallback": i18n::t(locale, "component.summary")
+        },
+        "details": {
+            "key": "component.details",
+            "fallback": i18n::t(locale, "component.details")
+        },
+        "use_cases": [
+            {
+                "key": "component.use_case.status_card",
+                "fallback": i18n::t(locale, "component.use_case.status_card")
+            },
+            {
+                "key": "component.use_case.ensure_token",
+                "fallback": i18n::t(locale, "component.use_case.ensure_token")
+            },
+            {
+                "key": "component.use_case.complete_sign_in",
+                "fallback": i18n::t(locale, "component.use_case.complete_sign_in")
             }
-        }
+        ],
+        "operations": [
+            {
+                "name": DEFAULT_OPERATION,
+                "summary": {
+                    "key": "component.operation.oauth_card.handle_message.summary",
+                    "fallback": i18n::t(locale, "component.operation.oauth_card.handle_message.summary")
+                }
+            },
+            {
+                "name": COMPONENT_INFO_OPERATION,
+                "summary": {
+                    "key": "component.operation.component_info.summary",
+                    "fallback": i18n::t(locale, "component.operation.component_info.summary")
+                }
+            },
+            {
+                "name": "qa-spec",
+                "summary": {
+                    "key": "component.operation.qa_spec.summary",
+                    "fallback": i18n::t(locale, "component.operation.qa_spec.summary")
+                }
+            },
+            {
+                "name": "apply-answers",
+                "summary": {
+                    "key": "component.operation.apply_answers.summary",
+                    "fallback": i18n::t(locale, "component.operation.apply_answers.summary")
+                }
+            },
+            {
+                "name": "i18n-keys",
+                "summary": {
+                    "key": "component.operation.i18n_keys.summary",
+                    "fallback": i18n::t(locale, "component.operation.i18n_keys.summary")
+                }
+            }
+        ]
     })
-    .to_string()
 }
 
-pub fn handle_message(operation: &str, input: &str) -> String {
-    let _ = operation;
-    let backend = broker::default_backend();
-    let response = broker::parse_input(input)
-        .and_then(|parsed| logic::handle(&backend, parsed))
-        .unwrap_or_else(|err| OAuthCardOutput {
-            status: OAuthStatus::Error,
-            card: None,
-            auth_context: None,
-            auth_header: None,
-            state_id: None,
-            error: Some(err.to_string()),
-        });
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn component_info_struct() -> ComponentInfo {
+    ComponentInfo {
+        id: "ai.greentic.component-oauth-card".to_string(),
+        version: COMPONENT_VERSION.to_string(),
+        role: "runtime".to_string(),
+        display_name: Some(I18nText::new(
+            "component.display_name",
+            Some(i18n::t("en", "component.display_name")),
+        )),
+    }
+}
 
-    serde_json::to_string(&response).unwrap_or_else(|err| {
-        serde_json::json!({
-            "status": "error",
-            "error": format!("serialization failure: {err}")
-        })
-        .to_string()
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn component_describe_struct() -> ComponentDescribe {
+    let config_schema = oauth_config_schema_ir();
+    let operations = [
+        (
+            DEFAULT_OPERATION,
+            oauth_input_schema_ir(),
+            oauth_output_schema_ir(),
+        ),
+        (
+            COMPONENT_INFO_OPERATION,
+            component_info_input_schema_ir(),
+            component_info_output_schema_ir(),
+        ),
+        (
+            "qa-spec",
+            qa_spec_input_schema_ir(),
+            qa_spec_output_schema_ir(),
+        ),
+        (
+            "apply-answers",
+            apply_answers_input_schema_ir(),
+            apply_answers_output_schema_ir(),
+        ),
+        (
+            "i18n-keys",
+            i18n_keys_input_schema_ir(),
+            i18n_keys_output_schema_ir(),
+        ),
+    ]
+    .into_iter()
+    .map(|(id, input, output)| ComponentOperation {
+        id: id.to_string(),
+        display_name: None,
+        input: ComponentRunInput {
+            schema: input.clone(),
+        },
+        output: ComponentRunOutput {
+            schema: output.clone(),
+        },
+        defaults: std::collections::BTreeMap::new(),
+        redactions: Vec::new(),
+        constraints: std::collections::BTreeMap::new(),
+        schema_hash: compute_schema_hash(&input, &output, &config_schema),
     })
+    .collect();
+
+    ComponentDescribe {
+        info: component_info_struct(),
+        provided_capabilities: vec!["messaging".to_string()],
+        required_capabilities: vec!["oauth-operation-results".to_string()],
+        metadata: std::collections::BTreeMap::new(),
+        operations,
+        config_schema,
+    }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn oauth_input_schema_ir() -> SchemaIr {
+    object_schema(
+        vec![
+            (
+                "mode",
+                enum_string_schema(&[
+                    "status-card",
+                    "start-sign-in",
+                    "complete-sign-in",
+                    "ensure-token",
+                    "disconnect",
+                ]),
+            ),
+            ("provider_id", bounded_string_schema(1, 128)),
+            ("subject", bounded_string_schema(1, 256)),
+            ("tenant", nullable_string_schema()),
+            ("team", nullable_string_schema()),
+            ("scopes", string_array_schema()),
+            ("state_id", nullable_string_schema()),
+            ("auth_code", nullable_string_schema()),
+            ("allow_auto_sign_in", SchemaIr::Bool),
+            ("redirect_path", nullable_string_schema()),
+            ("extra_json", optional_json_object_schema()),
+            ("current_token", nullable_token_schema()),
+            ("consent_url", nullable_string_schema()),
+            ("exchanged_token", nullable_token_schema()),
+            ("oauth_error", nullable_string_schema()),
+        ],
+        &["mode", "provider_id", "subject"],
+        AdditionalProperties::Forbid,
+    )
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn oauth_output_schema_ir() -> SchemaIr {
+    object_schema(
+        vec![
+            (
+                "status",
+                enum_string_schema(&["ok", "needs-sign-in", "error"]),
+            ),
+            ("card", nullable_message_card_schema()),
+            ("can_continue", SchemaIr::Bool),
+            ("auth_context", nullable_auth_context_schema()),
+            ("auth_header", nullable_auth_header_schema()),
+            ("state_id", nullable_string_schema()),
+            ("error", nullable_string_schema()),
+        ],
+        &["status", "can_continue"],
+        AdditionalProperties::Forbid,
+    )
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn oauth_config_schema_ir() -> SchemaIr {
+    object_schema(
+        vec![
+            ("provider_id", bounded_string_schema(1, 128)),
+            ("default_subject", nullable_string_schema()),
+            ("scopes", string_array_schema()),
+            ("tenant", nullable_string_schema()),
+            ("team", nullable_string_schema()),
+            ("redirect_path", nullable_string_schema()),
+            ("allow_auto_sign_in", SchemaIr::Bool),
+        ],
+        &[],
+        AdditionalProperties::Forbid,
+    )
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn qa_spec_input_schema_ir() -> SchemaIr {
+    object_schema(
+        vec![(
+            "mode",
+            enum_string_schema(&["default", "setup", "install", "update", "upgrade", "remove"]),
+        )],
+        &["mode"],
+        AdditionalProperties::Forbid,
+    )
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn qa_spec_output_schema_ir() -> SchemaIr {
+    object_schema(
+        vec![
+            ("mode", enum_string_schema(&["setup", "update", "remove"])),
+            ("title", i18n_text_schema()),
+            ("description", nullable_i18n_text_schema()),
+            ("questions", questions_array_schema()),
+            ("defaults", qa_defaults_schema()),
+        ],
+        &["mode", "questions", "defaults"],
+        AdditionalProperties::Allow,
+    )
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn component_info_input_schema_ir() -> SchemaIr {
+    object_schema(
+        vec![("locale", bounded_string_schema(2, 16))],
+        &[],
+        AdditionalProperties::Forbid,
+    )
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn component_info_output_schema_ir() -> SchemaIr {
+    object_schema(
+        vec![
+            ("id", bounded_string_schema(1, 128)),
+            ("name", bounded_string_schema(1, 128)),
+            ("version", bounded_string_schema(1, 32)),
+            ("display_name", i18n_text_schema()),
+            ("summary", i18n_text_schema()),
+            ("details", i18n_text_schema()),
+            ("use_cases", i18n_text_array_schema()),
+            ("operations", component_info_operations_schema()),
+        ],
+        &[
+            "id",
+            "name",
+            "version",
+            "display_name",
+            "summary",
+            "details",
+            "use_cases",
+            "operations",
+        ],
+        AdditionalProperties::Forbid,
+    )
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn apply_answers_input_schema_ir() -> SchemaIr {
+    object_schema(
+        vec![
+            (
+                "mode",
+                enum_string_schema(&["default", "setup", "install", "update", "upgrade", "remove"]),
+            ),
+            ("answers", optional_json_object_schema()),
+            ("current_config", oauth_config_schema_ir()),
+        ],
+        &["answers"],
+        AdditionalProperties::Allow,
+    )
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn apply_answers_output_schema_ir() -> SchemaIr {
+    object_schema(
+        vec![
+            ("ok", SchemaIr::Bool),
+            ("warnings", diagnostic_array_schema()),
+            ("errors", diagnostic_array_schema()),
+            ("config", oauth_config_schema_ir()),
+            ("meta", meta_schema()),
+            ("audit", audit_schema()),
+        ],
+        &["ok", "warnings", "errors"],
+        AdditionalProperties::Allow,
+    )
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn i18n_keys_input_schema_ir() -> SchemaIr {
+    object_schema(vec![], &[], AdditionalProperties::Forbid)
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn i18n_keys_output_schema_ir() -> SchemaIr {
+    string_array_schema()
+}
+
+fn object_schema(
+    properties: Vec<(&str, SchemaIr)>,
+    required: &[&str],
+    additional: AdditionalProperties,
+) -> SchemaIr {
+    let properties = properties
+        .into_iter()
+        .map(|(name, schema)| (name.to_string(), schema))
+        .collect();
+    let required = required.iter().map(|name| (*name).to_string()).collect();
+    SchemaIr::Object {
+        properties,
+        required,
+        additional,
+    }
+}
+
+fn string_schema() -> SchemaIr {
+    bounded_string_schema(0, 4096)
+}
+
+fn bounded_string_schema(min: u64, max: u64) -> SchemaIr {
+    SchemaIr::String {
+        min_len: Some(min),
+        max_len: Some(max),
+        regex: None,
+        format: None,
+    }
+}
+
+fn nullable_string_schema() -> SchemaIr {
+    SchemaIr::OneOf {
+        variants: vec![string_schema(), SchemaIr::Null],
+    }
+}
+
+fn string_array_schema() -> SchemaIr {
+    SchemaIr::Array {
+        items: Box::new(bounded_string_schema(1, 256)),
+        min_items: Some(0),
+        max_items: Some(64),
+    }
+}
+
+fn enum_string_schema(values: &[&str]) -> SchemaIr {
+    SchemaIr::Enum {
+        values: values
+            .iter()
+            .map(|value| ciborium::value::Value::Text((*value).to_string()))
+            .collect(),
+    }
+}
+
+fn compute_schema_hash(input: &SchemaIr, output: &SchemaIr, config: &SchemaIr) -> String {
+    schema_hash(input, output, config).unwrap_or_default()
+}
+
+fn i18n_text_schema() -> SchemaIr {
+    object_schema(
+        vec![
+            ("key", bounded_string_schema(1, 256)),
+            ("fallback", nullable_string_schema()),
+        ],
+        &["key"],
+        AdditionalProperties::Forbid,
+    )
+}
+
+fn nullable_i18n_text_schema() -> SchemaIr {
+    SchemaIr::OneOf {
+        variants: vec![i18n_text_schema(), SchemaIr::Null],
+    }
+}
+
+fn i18n_text_array_schema() -> SchemaIr {
+    SchemaIr::Array {
+        items: Box::new(i18n_text_schema()),
+        min_items: Some(0),
+        max_items: Some(32),
+    }
+}
+
+fn component_info_operations_schema() -> SchemaIr {
+    SchemaIr::Array {
+        items: Box::new(object_schema(
+            vec![
+                ("name", bounded_string_schema(1, 128)),
+                ("summary", i18n_text_schema()),
+            ],
+            &["name", "summary"],
+            AdditionalProperties::Forbid,
+        )),
+        min_items: Some(1),
+        max_items: Some(16),
+    }
+}
+
+fn optional_json_object_schema() -> SchemaIr {
+    object_schema(
+        vec![
+            ("note", nullable_string_schema()),
+            ("prompt", nullable_string_schema()),
+            ("resource", nullable_string_schema()),
+        ],
+        &[],
+        AdditionalProperties::Schema(Box::new(bounded_string_schema(0, 4096))),
+    )
+}
+
+fn token_schema() -> SchemaIr {
+    object_schema(
+        vec![
+            ("access_token", bounded_string_schema(1, 8192)),
+            ("refresh_token", nullable_string_schema()),
+            (
+                "expires_at",
+                SchemaIr::OneOf {
+                    variants: vec![
+                        SchemaIr::Int {
+                            min: Some(0),
+                            max: Some(9_007_199_254_740_991),
+                        },
+                        SchemaIr::Null,
+                    ],
+                },
+            ),
+            ("token_type", nullable_string_schema()),
+            (
+                "extra",
+                SchemaIr::OneOf {
+                    variants: vec![optional_json_object_schema(), SchemaIr::Null],
+                },
+            ),
+        ],
+        &["access_token"],
+        AdditionalProperties::Forbid,
+    )
+}
+
+fn nullable_token_schema() -> SchemaIr {
+    SchemaIr::OneOf {
+        variants: vec![token_schema(), SchemaIr::Null],
+    }
+}
+
+fn auth_context_schema() -> SchemaIr {
+    object_schema(
+        vec![
+            ("provider_id", bounded_string_schema(1, 128)),
+            ("subject", bounded_string_schema(1, 256)),
+            ("email", nullable_string_schema()),
+            ("tenant", nullable_string_schema()),
+            ("team", nullable_string_schema()),
+            ("scopes", string_array_schema()),
+            (
+                "expires_at",
+                SchemaIr::OneOf {
+                    variants: vec![
+                        SchemaIr::Int {
+                            min: Some(0),
+                            max: Some(9_007_199_254_740_991),
+                        },
+                        SchemaIr::Null,
+                    ],
+                },
+            ),
+        ],
+        &["provider_id", "subject", "scopes"],
+        AdditionalProperties::Forbid,
+    )
+}
+
+fn nullable_auth_context_schema() -> SchemaIr {
+    SchemaIr::OneOf {
+        variants: vec![auth_context_schema(), SchemaIr::Null],
+    }
+}
+
+fn auth_header_schema() -> SchemaIr {
+    object_schema(
+        vec![(
+            "headers",
+            SchemaIr::Array {
+                items: Box::new(SchemaIr::Array {
+                    items: Box::new(bounded_string_schema(1, 8192)),
+                    min_items: Some(2),
+                    max_items: Some(2),
+                }),
+                min_items: Some(1),
+                max_items: Some(16),
+            },
+        )],
+        &["headers"],
+        AdditionalProperties::Forbid,
+    )
+}
+
+fn nullable_auth_header_schema() -> SchemaIr {
+    SchemaIr::OneOf {
+        variants: vec![auth_header_schema(), SchemaIr::Null],
+    }
+}
+
+fn message_card_schema() -> SchemaIr {
+    object_schema(
+        vec![
+            ("kind", enum_string_schema(&["standard", "oauth"])),
+            ("title", nullable_string_schema()),
+            ("text", nullable_string_schema()),
+            ("footer", nullable_string_schema()),
+            (
+                "images",
+                SchemaIr::Array {
+                    items: Box::new(object_schema(
+                        vec![
+                            ("url", bounded_string_schema(1, 4096)),
+                            ("alt", nullable_string_schema()),
+                        ],
+                        &["url"],
+                        AdditionalProperties::Forbid,
+                    )),
+                    min_items: Some(0),
+                    max_items: Some(8),
+                },
+            ),
+            (
+                "actions",
+                SchemaIr::Array {
+                    items: Box::new(object_schema(
+                        vec![
+                            ("type", enum_string_schema(&["open_url", "post_back"])),
+                            ("title", bounded_string_schema(1, 128)),
+                            ("url", nullable_string_schema()),
+                            (
+                                "data",
+                                SchemaIr::OneOf {
+                                    variants: vec![optional_json_object_schema(), SchemaIr::Null],
+                                },
+                            ),
+                        ],
+                        &["type", "title"],
+                        AdditionalProperties::Forbid,
+                    )),
+                    min_items: Some(0),
+                    max_items: Some(8),
+                },
+            ),
+            ("allow_markdown", SchemaIr::Bool),
+            (
+                "adaptive",
+                SchemaIr::OneOf {
+                    variants: vec![optional_json_object_schema(), SchemaIr::Null],
+                },
+            ),
+            (
+                "oauth",
+                SchemaIr::OneOf {
+                    variants: vec![oauth_card_schema(), SchemaIr::Null],
+                },
+            ),
+        ],
+        &["kind", "images", "actions", "allow_markdown"],
+        AdditionalProperties::Forbid,
+    )
+}
+
+fn nullable_message_card_schema() -> SchemaIr {
+    SchemaIr::OneOf {
+        variants: vec![message_card_schema(), SchemaIr::Null],
+    }
+}
+
+fn oauth_card_schema() -> SchemaIr {
+    object_schema(
+        vec![
+            (
+                "provider",
+                enum_string_schema(&["microsoft", "google", "github", "custom"]),
+            ),
+            ("scopes", string_array_schema()),
+            ("resource", nullable_string_schema()),
+            (
+                "prompt",
+                SchemaIr::OneOf {
+                    variants: vec![
+                        enum_string_schema(&["none", "consent", "login"]),
+                        SchemaIr::Null,
+                    ],
+                },
+            ),
+            ("start_url", nullable_string_schema()),
+            ("connection_name", nullable_string_schema()),
+            (
+                "metadata",
+                SchemaIr::OneOf {
+                    variants: vec![optional_json_object_schema(), SchemaIr::Null],
+                },
+            ),
+        ],
+        &["provider", "scopes"],
+        AdditionalProperties::Forbid,
+    )
+}
+
+fn questions_array_schema() -> SchemaIr {
+    SchemaIr::Array {
+        items: Box::new(object_schema(
+            vec![
+                ("id", bounded_string_schema(1, 128)),
+                ("label", i18n_text_schema()),
+                ("help", nullable_i18n_text_schema()),
+                ("error", nullable_i18n_text_schema()),
+                ("kind", enum_string_schema(&["text", "bool", "select"])),
+                ("required", SchemaIr::Bool),
+            ],
+            &["id", "label", "kind", "required"],
+            AdditionalProperties::Forbid,
+        )),
+        min_items: Some(1),
+        max_items: Some(16),
+    }
+}
+
+fn qa_defaults_schema() -> SchemaIr {
+    object_schema(
+        vec![
+            ("allow_auto_sign_in", SchemaIr::Bool),
+            ("confirm_remove", SchemaIr::Bool),
+        ],
+        &[],
+        AdditionalProperties::Forbid,
+    )
+}
+
+fn diagnostic_array_schema() -> SchemaIr {
+    SchemaIr::Array {
+        items: Box::new(object_schema(
+            vec![
+                ("key", bounded_string_schema(1, 128)),
+                ("msg_key", bounded_string_schema(1, 128)),
+                ("fields", string_array_schema()),
+            ],
+            &["key", "msg_key", "fields"],
+            AdditionalProperties::Forbid,
+        )),
+        min_items: Some(0),
+        max_items: Some(32),
+    }
+}
+
+fn meta_schema() -> SchemaIr {
+    object_schema(
+        vec![
+            ("mode", bounded_string_schema(1, 32)),
+            ("version", bounded_string_schema(1, 16)),
+        ],
+        &["mode", "version"],
+        AdditionalProperties::Forbid,
+    )
+}
+
+fn audit_schema() -> SchemaIr {
+    object_schema(
+        vec![
+            ("reasons", string_array_schema()),
+            (
+                "timings_ms",
+                object_schema(vec![], &[], AdditionalProperties::Forbid),
+            ),
+        ],
+        &["reasons", "timings_ms"],
+        AdditionalProperties::Forbid,
+    )
+}
+
+pub fn oauth_input_schema_json() -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "component-oauth-card oauth_card.handle_message input",
+        "type": "object",
+        "properties": {
+            "mode": {
+                "type": "string",
+                "enum": ["status-card", "start-sign-in", "complete-sign-in", "ensure-token", "disconnect"],
+                "default": "status-card"
+            },
+            "provider_id": { "type": "string" },
+            "subject": { "type": "string" },
+            "tenant": { "type": ["string", "null"] },
+            "team": { "type": ["string", "null"] },
+            "scopes": {
+                "type": "array",
+                "items": { "type": "string" },
+                "default": []
+            },
+            "state_id": { "type": ["string", "null"] },
+            "auth_code": { "type": ["string", "null"] },
+            "allow_auto_sign_in": {
+                "type": "boolean",
+                "default": false
+            },
+            "redirect_path": { "type": ["string", "null"] },
+            "extra_json": {},
+            "current_token": {
+                "type": ["object", "null"],
+                "additionalProperties": true
+            },
+            "consent_url": {
+                "type": ["string", "null"]
+            },
+            "exchanged_token": {
+                "type": ["object", "null"],
+                "additionalProperties": true
+            },
+            "oauth_error": {
+                "type": ["string", "null"]
+            }
+        },
+        "required": ["mode", "provider_id", "subject"],
+        "additionalProperties": false
+    })
+}
+
+pub fn oauth_output_schema_json() -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "component-oauth-card oauth_card.handle_message output",
+        "type": "object",
+        "properties": {
+            "status": {
+                "type": "string",
+                "enum": ["ok", "needs-sign-in", "error"]
+            },
+            "card": {
+                "type": ["object", "null"],
+                "additionalProperties": true
+            },
+            "can_continue": {
+                "type": "boolean"
+            },
+            "auth_context": {
+                "type": ["object", "null"],
+                "additionalProperties": true
+            },
+            "auth_header": {
+                "type": ["object", "null"],
+                "additionalProperties": true
+            },
+            "state_id": { "type": ["string", "null"] },
+            "error": { "type": ["string", "null"] }
+        },
+        "required": ["status", "can_continue"],
+        "additionalProperties": false
+    })
+}
+
+pub fn qa_spec_input_schema_json() -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "component-oauth-card qa-spec input",
+        "type": "object",
+        "properties": {
+            "mode": {
+                "type": "string",
+                "enum": ["default", "setup", "install", "update", "upgrade", "remove"]
+            }
+        },
+        "required": ["mode"],
+        "additionalProperties": false
+    })
+}
+
+pub fn component_info_input_schema_json() -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "component-oauth-card component-info input",
+        "type": "object",
+        "properties": {
+            "locale": {
+                "type": "string",
+                "default": "en"
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+pub fn component_info_output_schema_json() -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "component-oauth-card component-info output",
+        "type": "object",
+        "properties": {
+            "id": { "type": "string" },
+            "name": { "type": "string" },
+            "version": { "type": "string" },
+            "display_name": { "type": "object", "additionalProperties": true },
+            "summary": { "type": "object", "additionalProperties": true },
+            "details": { "type": "object", "additionalProperties": true },
+            "use_cases": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+            "operations": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
+        },
+        "required": ["id", "name", "version", "display_name", "summary", "details", "use_cases", "operations"],
+        "additionalProperties": false
+    })
+}
+
+pub fn qa_spec_output_schema_json() -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "component-oauth-card qa-spec output",
+        "type": "object",
+        "properties": {
+            "mode": {
+                "type": "string",
+                "enum": ["setup", "update", "remove"]
+            },
+            "title": {
+                "type": "object",
+                "additionalProperties": true
+            },
+            "description": {
+                "type": ["object", "null"],
+                "additionalProperties": true
+            },
+            "questions": {
+                "type": "array",
+                "items": { "type": "object", "additionalProperties": true }
+            },
+            "defaults": {
+                "type": "object",
+                "additionalProperties": true
+            }
+        },
+        "required": ["mode", "questions", "defaults"],
+        "additionalProperties": true
+    })
+}
+
+pub fn apply_answers_input_schema_json() -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "component-oauth-card apply-answers input",
+        "type": "object",
+        "properties": {
+            "mode": {
+                "type": "string",
+                "enum": ["default", "setup", "install", "update", "upgrade", "remove"]
+            },
+            "answers": {
+                "type": "object",
+                "additionalProperties": true
+            },
+            "current_config": oauth_config_schema_json()
+        },
+        "required": ["answers"],
+        "additionalProperties": true
+    })
+}
+
+pub fn apply_answers_output_schema_json() -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "component-oauth-card apply-answers output",
+        "type": "object",
+        "properties": {
+            "ok": { "type": "boolean" },
+            "warnings": {
+                "type": "array",
+                "items": {}
+            },
+            "errors": {
+                "type": "array",
+                "items": {}
+            },
+            "config": oauth_config_schema_json(),
+            "meta": {
+                "type": "object",
+                "additionalProperties": true
+            },
+            "audit": {
+                "type": "object",
+                "additionalProperties": true
+            }
+        },
+        "required": ["ok", "warnings", "errors"],
+        "additionalProperties": true
+    })
+}
+
+pub fn i18n_keys_input_schema_json() -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "component-oauth-card i18n-keys input",
+        "type": "object",
+        "additionalProperties": false
+    })
+}
+
+pub fn i18n_keys_output_schema_json() -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "component-oauth-card i18n-keys output",
+        "type": "array",
+        "items": { "type": "string" }
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
+fn encode_cbor<T: serde::Serialize>(value: &T) -> Vec<u8> {
+    canonical::to_canonical_cbor_allow_floats(value).expect("encode cbor")
+}
+
+#[cfg(target_arch = "wasm32")]
+fn decode_payload(bytes: &[u8]) -> Value {
+    canonical::from_cbor::<Value>(bytes)
+        .or_else(|_| serde_json::from_slice(bytes))
+        .unwrap_or_else(|_| json!({}))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn node_op(name: &str, summary_key: &str, input: SchemaIr, output: SchemaIr) -> node::Op {
+    node::Op {
+        name: name.to_string(),
+        summary: Some(i18n::t("en", summary_key)),
+        input: node::IoSchema {
+            schema: node::SchemaSource::InlineCbor(encode_cbor(&input)),
+            content_type: "application/cbor".to_string(),
+            schema_version: None,
+        },
+        output: node::IoSchema {
+            schema: node::SchemaSource::InlineCbor(encode_cbor(&output)),
+            content_type: "application/cbor".to_string(),
+            schema_version: None,
+        },
+        examples: Vec::new(),
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn run_component_cbor(operation: &str, input: Vec<u8>) -> Vec<u8> {
+    let payload = decode_payload(&input);
+    let output = invoke_json(operation, &payload).unwrap_or_else(|err| json!(error_output(err)));
+    encode_cbor(&output)
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::broker::MockBroker;
-    use crate::model::{OAuthCardInput, OAuthCardMode, TokenSet};
 
     #[test]
-    fn describe_payload_is_json() {
-        let payload = describe_payload();
-        let json: serde_json::Value =
-            serde_json::from_str(&payload).unwrap_or_else(|err| panic!("valid json: {err}"));
-        assert_eq!(json["component"]["name"], "component-oauth-card");
+    fn component_version_tracks_cargo_package_version() {
+        assert_eq!(COMPONENT_VERSION, env!("CARGO_PKG_VERSION"));
     }
 
     #[test]
-    fn status_card_connected() {
-        let backend = MockBroker {
-            token: Some(TokenSet {
-                access_token: "token123".into(),
-                refresh_token: None,
-                expires_at: Some(123),
-                token_type: Some("Bearer".into()),
-                extra: Some(serde_json::json!({ "email": "user@example.com" })),
+    fn handle_returns_needs_sign_in_when_no_token() {
+        let payload = json!({
+            "mode": "status-card",
+            "provider_id": "demo",
+            "subject": "user-1",
+            "scopes": ["openid"]
+        });
+        let response = invoke_json(DEFAULT_OPERATION, &payload).expect("invoke should succeed");
+        assert_eq!(response["status"], "needs-sign-in");
+        assert_eq!(response["can_continue"], false);
+    }
+
+    #[test]
+    fn qa_spec_accepts_default_alias() {
+        let response =
+            invoke_json("qa-spec", &json!({ "mode": "default" })).expect("qa-spec should succeed");
+        assert_eq!(response["mode"], "setup");
+        assert!(response["questions"].is_array());
+    }
+
+    #[test]
+    fn i18n_keys_include_setup_title() {
+        let response = invoke_json("i18n-keys", &json!({})).expect("i18n-keys should succeed");
+        let keys = response.as_array().expect("array");
+        assert!(keys.iter().any(|key| key == "qa.setup.title"));
+        assert!(keys.iter().any(|key| key == "component.summary"));
+    }
+
+    #[test]
+    fn apply_answers_builds_config() {
+        let response = invoke_json(
+            "apply-answers",
+            &json!({
+                "mode": "setup",
+                "answers": {
+                    "provider_id": "msgraph",
+                    "default_subject": "user-1",
+                    "scopes_csv": "openid,offline_access",
+                    "allow_auto_sign_in": true
+                }
             }),
-            consent_url: "https://consent".into(),
-        };
-        let input = OAuthCardInput {
-            mode: OAuthCardMode::StatusCard,
-            provider_id: "msgraph".into(),
-            subject: "user-1".into(),
-            tenant: Some("tenant-1".into()),
-            team: Some("team-1".into()),
-            scopes: vec!["scope-a".into()],
-            state_id: None,
-            auth_code: None,
-            allow_auto_sign_in: false,
-            redirect_path: None,
-            extra_json: None,
-        };
+        )
+        .expect("apply-answers should succeed");
 
-        let output =
-            logic::handle(&backend, input).unwrap_or_else(|err| panic!("status ok: {err}"));
-        assert_eq!(output.status, OAuthStatus::Ok);
-        assert!(output.auth_header.is_some());
-        assert!(output.card.is_some());
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["config"]["provider_id"], "msgraph");
+        assert_eq!(response["config"]["allow_auto_sign_in"], true);
+        assert_eq!(response["config"]["scopes"][0], "openid");
     }
 
     #[test]
-    fn ensure_token_prompts_sign_in() {
-        let backend = MockBroker {
-            token: None,
-            consent_url: "https://consent/start".into(),
-        };
-        let input = OAuthCardInput {
-            mode: OAuthCardMode::EnsureToken,
-            provider_id: "msgraph".into(),
-            subject: "user-1".into(),
-            tenant: None,
-            team: None,
-            scopes: vec![],
-            state_id: None,
-            auth_code: None,
-            allow_auto_sign_in: true,
-            redirect_path: None,
-            extra_json: None,
-        };
-
-        let output =
-            logic::handle(&backend, input).unwrap_or_else(|err| panic!("needs sign-in: {err}"));
-        assert_eq!(output.status, OAuthStatus::NeedsSignIn);
-        assert!(output.card.is_some());
+    fn invoke_json_reports_unsupported_operation() {
+        let err = invoke_json("unknown.operation", &json!({})).expect_err("should fail");
+        assert!(matches!(err, OAuthCardError::Unsupported(_)));
+        assert!(err.to_string().contains("unsupported operation"));
     }
 
     #[test]
-    fn start_sign_in_returns_state_and_card() {
-        let backend = MockBroker {
-            token: None,
-            consent_url: "https://consent/start".into(),
-        };
-        let input = OAuthCardInput {
-            mode: OAuthCardMode::StartSignIn,
-            provider_id: "msgraph".into(),
-            subject: "user-1".into(),
-            tenant: None,
-            team: None,
-            scopes: vec!["openid".into()],
-            state_id: None,
-            auth_code: None,
-            allow_auto_sign_in: false,
-            redirect_path: Some("/oauth/callback/msgraph".into()),
-            extra_json: None,
-        };
-
-        let output =
-            logic::handle(&backend, input).unwrap_or_else(|err| panic!("start sign-in: {err}"));
-        assert_eq!(output.status, OAuthStatus::Ok);
-        assert!(output.state_id.is_some());
-        let card = if let Some(card) = output.card {
-            card
-        } else {
-            panic!("card present")
-        };
-        assert_eq!(card.title.as_deref(), Some("Connect msgraph account"));
-        let oauth = if let Some(oauth) = card.oauth {
-            oauth
-        } else {
-            panic!("oauth payload")
-        };
-        assert_eq!(oauth.start_url.as_deref(), Some("https://consent/start"));
-        assert!(card.actions.iter().any(|a| matches!(
-            a,
-            crate::model::Action::OpenUrl { url, .. } if url == "https://consent/start"
-        )));
-    }
-
-    #[test]
-    fn complete_sign_in_yields_auth_header() {
-        let backend = MockBroker {
-            token: Some(TokenSet {
-                access_token: "token123".into(),
-                refresh_token: Some("refresh".into()),
-                expires_at: Some(999),
-                token_type: Some("Bearer".into()),
-                extra: Some(serde_json::json!({ "email": "user@example.com" })),
+    fn invoke_json_merges_config_defaults_into_handle_input() {
+        let response = invoke_json(
+            DEFAULT_OPERATION,
+            &json!({
+                "config": {
+                    "provider_id": "github",
+                    "default_subject": "user-from-config",
+                    "scopes": ["repo"],
+                    "tenant": "tenant-a",
+                    "team": "team-a",
+                    "allow_auto_sign_in": true
+                }
             }),
-            consent_url: "https://consent/start".into(),
-        };
-        let input = OAuthCardInput {
-            mode: OAuthCardMode::CompleteSignIn,
-            provider_id: "msgraph".into(),
-            subject: "user-1".into(),
-            tenant: Some("t".into()),
-            team: Some("team-1".into()),
-            scopes: vec!["openid".into()],
-            state_id: Some("state-1".into()),
-            auth_code: Some("code-123".into()),
-            allow_auto_sign_in: false,
-            redirect_path: None,
-            extra_json: None,
-        };
+        )
+        .expect("invoke should succeed");
 
-        let output =
-            logic::handle(&backend, input).unwrap_or_else(|err| panic!("complete sign-in: {err}"));
-        assert_eq!(output.status, OAuthStatus::Ok);
-        assert!(output.auth_header.is_some());
-        let auth_header = output
-            .auth_header
-            .unwrap_or_else(|| panic!("auth header present"));
-        let auth = auth_header
-            .headers
-            .iter()
-            .find(|(k, _)| k == "Authorization")
-            .map(|(_, v)| v.as_str());
-        assert_eq!(auth, Some("Bearer token123"));
-        assert_eq!(
-            output.auth_context.and_then(|ctx| ctx.email).as_deref(),
-            Some("user@example.com")
-        );
+        assert_eq!(response["status"], "needs-sign-in");
+        assert_eq!(response["can_continue"], false);
+        assert_eq!(response["card"]["oauth"]["provider"], "github");
+        assert_eq!(response["card"]["oauth"]["scopes"][0], "repo");
     }
 
     #[test]
-    fn disconnect_returns_reconnect_card() {
-        let backend = MockBroker {
-            token: None,
-            consent_url: "https://consent/start".into(),
-        };
-        let input = OAuthCardInput {
-            mode: OAuthCardMode::Disconnect,
-            provider_id: "msgraph".into(),
-            subject: "user-1".into(),
-            tenant: None,
-            team: None,
-            scopes: vec!["openid".into()],
-            state_id: None,
-            auth_code: None,
-            allow_auto_sign_in: false,
-            redirect_path: None,
-            extra_json: None,
-        };
+    fn invoke_json_preserves_explicit_input_over_config_defaults() {
+        let response = invoke_json(
+            DEFAULT_OPERATION,
+            &json!({
+                "mode": "status-card",
+                "provider_id": "google",
+                "subject": "explicit-user",
+                "scopes": ["openid"],
+                "config": {
+                    "provider_id": "github",
+                    "default_subject": "config-user",
+                    "scopes": ["repo"]
+                }
+            }),
+        )
+        .expect("invoke should succeed");
 
-        let output =
-            logic::handle(&backend, input).unwrap_or_else(|err| panic!("disconnect card: {err}"));
-        assert_eq!(output.status, OAuthStatus::Ok);
-        let card = if let Some(card) = output.card {
-            card
-        } else {
-            panic!("card present")
-        };
+        assert_eq!(response["card"]["oauth"]["provider"], "google");
+        assert_eq!(response["can_continue"], false);
+        assert_eq!(response["card"]["oauth"]["scopes"][0], "openid");
         assert!(
-            card.title
-                .as_deref()
-                .unwrap_or_default()
-                .contains("Disconnected")
+            response["card"]["text"]
+                .as_str()
+                .expect("card text")
+                .contains("flow cannot continue")
         );
-        assert!(card.actions.iter().any(|a| matches!(
-            a,
-            crate::model::Action::PostBack { data, .. }
-                if data.get("mode").and_then(|v| v.as_str()) == Some("start-sign-in")
-        )));
+    }
+
+    #[test]
+    fn handle_message_alias_uses_same_path() {
+        let response = invoke_json(
+            "handle_message",
+            &json!({
+                "mode": "status-card",
+                "provider_id": "m365",
+                "subject": "user-1"
+            }),
+        )
+        .expect("alias should succeed");
+
+        assert_eq!(response["status"], "needs-sign-in");
+        assert_eq!(response["can_continue"], false);
+        assert_eq!(response["card"]["oauth"]["provider"], "microsoft");
+    }
+
+    #[test]
+    fn apply_answers_remove_mode_returns_success_without_config() {
+        let response = invoke_json(
+            "apply-answers",
+            &json!({
+                "mode": "remove",
+                "answers": {
+                    "confirm_remove": true
+                },
+                "current_config": {
+                    "provider_id": "github"
+                }
+            }),
+        )
+        .expect("apply-answers should succeed");
+
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["config"]["provider_id"], "github");
+    }
+
+    #[test]
+    fn apply_answers_setup_defaults_missing_provider() {
+        let response = invoke_json(
+            "apply-answers",
+            &json!({
+                "mode": "setup",
+                "answers": {
+                    "default_subject": "user-1"
+                }
+            }),
+        )
+        .expect("apply-answers should succeed");
+
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["warnings"][0]["fields"][0], "provider_id");
+        assert_eq!(response["config"]["provider_id"], "oauth-provider");
+    }
+
+    #[test]
+    fn normalized_mode_prefers_mode_then_operation_alias() {
+        assert_eq!(
+            normalized_mode(&json!({ "mode": "upgrade" })),
+            qa::NormalizedMode::Update
+        );
+        assert_eq!(
+            normalized_mode(&json!({ "operation": "remove" })),
+            qa::NormalizedMode::Remove
+        );
+        assert_eq!(normalized_mode(&json!({})), qa::NormalizedMode::Setup);
+    }
+
+    #[test]
+    fn schema_helpers_expose_expected_required_fields() {
+        assert!(
+            oauth_config_schema_json()["required"]
+                .as_array()
+                .expect("required array")
+                .is_empty()
+        );
+        assert_eq!(oauth_input_schema_json()["required"][0], "mode");
+        assert_eq!(qa_spec_input_schema_json()["required"][0], "mode");
+        assert_eq!(apply_answers_input_schema_json()["required"][0], "answers");
+        assert_eq!(component_info_input_schema_json()["type"], "object");
+        assert_eq!(i18n_keys_output_schema_json()["type"], "array");
+    }
+
+    #[test]
+    fn component_info_returns_i18n_aware_self_description() {
+        let response = invoke_json(COMPONENT_INFO_OPERATION, &json!({ "locale": "en-GB" }))
+            .expect("component-info should succeed");
+
+        assert_eq!(response["name"], COMPONENT_NAME);
+        assert_eq!(response["version"], COMPONENT_VERSION);
+        assert_eq!(response["display_name"]["key"], "component.display_name");
+        assert_eq!(
+            response["summary"]["fallback"],
+            "Shows OAuth connection status and sign-in actions for a chosen provider, using results from upstream Greentic OAuth operations and the provider extension."
+        );
+        assert!(
+            response["details"]["fallback"]
+                .as_str()
+                .expect("details fallback should be string")
+                .contains("Greentic OAuth provider extension")
+        );
+        assert_eq!(response["operations"][0]["name"], DEFAULT_OPERATION);
+    }
+
+    #[test]
+    fn canonical_describe_struct_builds() {
+        let describe = component_describe_struct();
+        assert_eq!(describe.info.id, "ai.greentic.component-oauth-card");
+        assert_eq!(describe.operations.len(), 5);
+    }
+
+    #[test]
+    fn handle_returns_ok_when_current_token_is_supplied() {
+        let response = invoke_json(
+            DEFAULT_OPERATION,
+            &json!({
+                "mode": "ensure-token",
+                "provider_id": "demo",
+                "subject": "user-1",
+                "current_token": {
+                    "access_token": "abc",
+                    "refresh_token": "refresh",
+                    "expires_at": 123,
+                    "token_type": "Bearer",
+                    "extra": null
+                }
+            }),
+        )
+        .expect("invoke should succeed");
+
+        assert_eq!(response["status"], "ok");
+        assert_eq!(response["can_continue"], true);
+        assert_eq!(response["auth_header"]["headers"][0][1], "Bearer abc");
+    }
+
+    #[test]
+    fn start_sign_in_requires_supplied_consent_url() {
+        let response = invoke_json(
+            DEFAULT_OPERATION,
+            &json!({
+                "mode": "start-sign-in",
+                "provider_id": "demo",
+                "subject": "user-1"
+            }),
+        )
+        .expect("invoke should succeed");
+
+        assert_eq!(response["status"], "error");
+        assert_eq!(response["can_continue"], false);
+        assert!(
+            response["error"]
+                .as_str()
+                .expect("error string")
+                .contains("consent_url is required")
+        );
+    }
+
+    #[test]
+    fn complete_sign_in_uses_exchanged_token_from_payload() {
+        let response = invoke_json(
+            DEFAULT_OPERATION,
+            &json!({
+                "mode": "complete-sign-in",
+                "provider_id": "demo",
+                "subject": "user-1",
+                "auth_code": "code",
+                "exchanged_token": {
+                    "access_token": "new-token",
+                    "refresh_token": "refresh",
+                    "expires_at": 123,
+                    "token_type": "Bearer",
+                    "extra": null
+                }
+            }),
+        )
+        .expect("invoke should succeed");
+
+        assert_eq!(response["status"], "ok");
+        assert_eq!(response["can_continue"], true);
+        assert_eq!(response["auth_context"]["provider_id"], "demo");
     }
 }

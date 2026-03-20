@@ -1,25 +1,38 @@
 [package]
 name = "component-oauth-card"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 license = "MIT"
-rust-version = "1.89"
+rust-version = "1.91"
 description = "Greentic component component-oauth-card"
 repository = "https://github.com/component-oauth-card"
 authors = ["maarten"]
+build = "build.rs"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[package.metadata.greentic]
+abi_version = "0.6.0"
+
+[package.metadata.component]
+package = "greentic:component"
+
+[package.metadata.component.target]
+world = "greentic:component/component@0.6.0"
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-greentic-types = { version = "0.4" }
+greentic-types = "0.4"
+greentic-interfaces-guest = { version = "0.4", default-features = false, features = ["component-v0-6"] }
+ciborium = "0.2"
 thiserror = "2"
 uuid = { version = "1", features = ["v4"] }
 
-[dev-dependencies]
+[build-dependencies]
+greentic-types = "0.4"
 serde_json = "1"
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-greentic-interfaces-guest = { version = "0.4", default-features = false, features = ["component-node", "oauth-broker"] }
+[dev-dependencies]
+serde_json = "1"
