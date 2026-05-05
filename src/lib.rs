@@ -26,7 +26,7 @@ use serde_json::{Value, json};
 use thiserror::Error;
 
 #[cfg(target_arch = "wasm32")]
-use greentic_interfaces_guest::component_v0_6::node;
+use greentic_interfaces_guest::component_v0_6::{component_i18n, component_qa, node};
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 const COMPONENT_NAME: &str = "component-oauth-card";
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
@@ -113,7 +113,55 @@ impl node::Guest for Component {
 }
 
 #[cfg(target_arch = "wasm32")]
-greentic_interfaces_guest::export_component_v060!(Component);
+impl component_qa::Guest for Component {
+    fn qa_spec(mode: component_qa::QaMode) -> Vec<u8> {
+        let normalized = match mode {
+            component_qa::QaMode::Default | component_qa::QaMode::Setup => {
+                qa::NormalizedMode::Setup
+            }
+            component_qa::QaMode::Update => qa::NormalizedMode::Update,
+            component_qa::QaMode::Remove => qa::NormalizedMode::Remove,
+        };
+        let json_val = qa::qa_spec_json(normalized);
+        encode_cbor(&json_val)
+    }
+
+    fn apply_answers(
+        mode: component_qa::QaMode,
+        current_config: Vec<u8>,
+        answers: Vec<u8>,
+    ) -> Vec<u8> {
+        let normalized = match mode {
+            component_qa::QaMode::Default | component_qa::QaMode::Setup => {
+                qa::NormalizedMode::Setup
+            }
+            component_qa::QaMode::Update => qa::NormalizedMode::Update,
+            component_qa::QaMode::Remove => qa::NormalizedMode::Remove,
+        };
+        let config_val = decode_payload(&current_config);
+        let answers_val = decode_payload(&answers);
+        let payload = json!({
+            "current_config": config_val,
+            "answers": answers_val,
+        });
+        let result = qa::apply_answers(normalized, &payload);
+        encode_cbor(&result)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl component_i18n::Guest for Component {
+    fn i18n_keys() -> Vec<String> {
+        qa::i18n_keys()
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+greentic_interfaces_guest::export_component_v060!(
+    Component,
+    component_qa: Component,
+    component_i18n: Component,
+);
 
 pub fn invoke_json(operation: &str, payload: &Value) -> Result<Value, OAuthCardError> {
     match operation {
